@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>星火 · 桎梏 - 瓜分与粘合的深渊 (文案排版优化版)</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+
+    <style>
+        body { 
+            margin: 0; background: #000000; 
+            color: white; overflow: hidden; touch-action: none; 
+            font-family: "Microsoft YaHei", sans-serif; 
+        }
+        #webgl-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; }
+        
+        /* 交互提示 */
+        #hint {
+            position: absolute; bottom: 6%; width: 100%; text-align: center;
+            font-size: 14px; color: #aa88ff; letter-spacing: 2px;
+            animation: pulse 2s infinite alternate; pointer-events: none; z-index: 10;
+        }
+        @keyframes pulse { 0% { opacity: 0.3; } 100% { opacity: 1; } }
+
+        /* 不平等条约科普弹窗 */
+        #treaty-popup {
+            position: fixed; top: 20%; left: 50%; transform: translate(-50%, -50%) scale(0.9);
+            width: 85%; max-width: 420px;
+            background: linear-gradient(135deg, rgba(30, 5, 20, 0.9), rgba(10, 0, 10, 0.95));
+            border: 1px solid rgba(255, 42, 122, 0.5); 
+            box-shadow: 0 0 50px rgba(255, 42, 122, 0.3), inset 0 0 20px rgba(255, 0, 0, 0.2);
+            color: #eee; text-align: left; padding: 30px 25px; box-sizing: border-box;
+            z-index: 95; opacity: 0; pointer-events: none; border-radius: 8px;
+            transition: opacity 0.4s ease, transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        #treaty-popup.visible { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+        .treaty-title { font-size: 22px; font-weight: bold; color: #ff2a7a; margin-bottom: 12px; border-bottom: 1px dashed rgba(255,42,122,0.4); padding-bottom: 10px; letter-spacing: 1px; }
+        .treaty-content { font-size: 15px; line-height: 1.7; color: #dcdcdc; }
+        
+        #progress-hud {
+            position: absolute; top: 25px; right: 25px; z-index: 20;
+            font-size: 16px; font-weight: bold; color: #ff2a7a; letter-spacing: 2px;
+        }
+
+        /* 标题与描述文案的聚合容器 */
+        #bottom-ui {
+            position: absolute; bottom: 15%; width: 100%; text-align: center; pointer-events: none; z-index: 10;
+        }
+        #bottom-ui h1 { font-size: 34px; color: #ff2a7a; letter-spacing: 12px; text-shadow: 0 0 25px rgba(255, 42, 122, 0.9); font-weight: bold; margin: 0;}
+        #bottom-ui p { font-size: 15px; color: rgba(255, 255, 255, 0.7); margin-top: 15px; letter-spacing: 2px; line-height: 1.6; text-shadow: 0 0 10px rgba(0,0,0,0.8); }
+    </style>
+</head>
+<body>
+    <div id="bottom-ui">
+        <h1>无形之网</h1>
+        <p>强邻环伺，罗网深陷；中国在瓜分狂潮中濒临崩溃。</p>
+    </div>
+
+    <div id="hint">— 拨开紫红引力节点，击碎帝国主义的罗网 —</div>
+    
+    <div id="progress-hud">已撕毁条约: <span id="broken-count">0</span></div>
+
+    <div id="treaty-popup">
+        <div class="treaty-title" id="treaty-name"></div>
+        <div class="treaty-content" id="treaty-info"></div>
+    </div>
+
+    <div id="webgl-container"></div>
+
+<script>
+    const TREATIES_DB = [
+        { name: "《南京条约》 (1842)", info: "割让香港岛，赔款2100万银元，中国开始沦为半殖民地半封建社会。" },
+        { name: "《瑷珲条约》 (1858)", info: "沙俄割占中国黑龙江以北、外兴安岭以南60多万平方公里领土。" },
+        { name: "《北京条约》 (1860)", info: "割让九龙司地方一区，增开天津为商埠，半殖民地化进一步加深。" },
+        { name: "《马关条约》 (1895)", info: "甲午战败，割让台湾岛及附属岛屿，赔偿白银2亿两。大大加深了中国半殖民地化程度。" },
+        { name: "《辛丑条约》 (1901)", info: "巨额赔款4.5亿两白银，清政府完全成为列强统治中国的工具。完全陷入深渊。" }
+    ];
+
+    let scene, camera, renderer, composer;
+    let networkPoints, networkLines;
+    const PARTICLE_COUNT = 70;
+    const MAX_DISTANCE = 130; 
+    let particlesData = [];
+    let particlePositions, linePositions, lineColors;
+
+    let sparkGroup;
+    const SPARK_FRAGMENTS = 300; 
+    let sparkData = []; 
+
+    let raycaster, mouse;
+    let isActive = true;
+    let brokenCount = 0;
+    let popupTimer;
+
+    function getGlowTexture(colorStr, coreSize = 0.2) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 128; canvas.height = 128; 
+        const ctx = canvas.getContext('2d');
+        const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+        grad.addColorStop(0, '#ffffff'); 
+        grad.addColorStop(coreSize, colorStr); 
+        grad.addColorStop(1, 'rgba(0,0,0,0)'); 
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 128, 128);
+        return new THREE.CanvasTexture(canvas);
+    }
+
+    function init() {
+        scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x000000, 0.002);
+
+        camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 2000);
+        camera.position.set(0, 100, 400);
+
+        renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.getElementById('webgl-container').appendChild(renderer.domElement);
+
+        raycaster = new THREE.Raycaster();
+        raycaster.params.Points.threshold = 20; 
+        mouse = new THREE.Vector2();
+
+        const renderPass = new THREE.RenderPass(scene, camera);
+        const bloomPass = new THREE.UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight), 2.2, 0.4, 0.1
+        );
+        composer = new THREE.EffectComposer(renderer);
+        composer.addPass(renderPass);
+        composer.addPass(bloomPass);
+
+        createFluidCentralSpark();
+        createGravitationalNetwork();
+
+        window.addEventListener('click', onInteract, false);
+        window.addEventListener('touchstart', onInteract, {passive: false});
+        window.addEventListener('resize', onWindowResize, false);
+
+        animate();
+    }
+
+    function createFluidCentralSpark() {
+        const geom = new THREE.BufferGeometry();
+        const pos = new Float32Array(SPARK_FRAGMENTS * 3);
+        
+        for (let i = 0; i < SPARK_FRAGMENTS; i++) {
+            const r = Math.random() * 16;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos((Math.random() * 2) - 1);
+            
+            const bx = r * Math.sin(phi) * Math.cos(theta);
+            const by = r * Math.sin(phi) * Math.sin(theta);
+            const bz = r * Math.cos(phi);
+
+            pos[i*3] = bx; pos[i*3+1] = by; pos[i*3+2] = bz;
+            
+            sparkData.push({
+                baseX: bx, baseY: by, baseZ: bz, 
+                currX: bx, currY: by, currZ: bz, 
+                vx: 0, vy: 0, vz: 0 
+            });
+        }
+
+        geom.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
+        
+        const mat = new THREE.PointsMaterial({
+            size: 45, 
+            map: getGlowTexture('rgba(255, 90, 0, 0.85)', 0.15), 
+            transparent: true, 
+            blending: THREE.AdditiveBlending, 
+            depthWrite: false
+        });
+        
+        sparkGroup = new THREE.Points(geom, mat);
+        scene.add(sparkGroup);
+    }
+
+    function createGravitationalNetwork() {
+        const pMaterial = new THREE.PointsMaterial({
+            size: 24, map: getGlowTexture('rgba(200, 20, 150, 0.9)', 0.2), 
+            transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+        });
+
+        const lMaterial = new THREE.LineBasicMaterial({
+            vertexColors: true, transparent: true, opacity: 1.0, 
+            blending: THREE.AdditiveBlending, depthWrite: false
+        });
+
+        const pGeometry = new THREE.BufferGeometry();
+        particlePositions = new Float32Array(PARTICLE_COUNT * 3);
+
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            const radius = 80 + Math.random() * 220; 
+            const angle = Math.random() * Math.PI * 2; 
+            const yOffset = (Math.random() - 0.5) * 180; 
+
+            particlePositions[i*3] = Math.cos(angle) * radius;
+            particlePositions[i*3+1] = yOffset;
+            particlePositions[i*3+2] = Math.sin(angle) * radius;
+
+            particlesData.push({
+                radius: radius, angle: angle, yOffset: yOffset,
+                speed: (Math.random() * 0.3 + 0.1) * (Math.random() > 0.5 ? 1 : -1), 
+                floatSpeed: Math.random() * 2 + 0.5, 
+                floatPhase: Math.random() * Math.PI * 2,
+                active: true, opacity: 1.0 
+            });
+        }
+
+        pGeometry.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3).setUsage(THREE.DynamicDrawUsage));
+        networkPoints = new THREE.Points(pGeometry, pMaterial);
+        scene.add(networkPoints);
+
+        const maxLines = (PARTICLE_COUNT * (PARTICLE_COUNT - 1)) / 2;
+        const lGeometry = new THREE.BufferGeometry();
+        linePositions = new Float32Array(maxLines * 6);
+        lineColors = new Float32Array(maxLines * 6);
+
+        lGeometry.setAttribute('position', new THREE.BufferAttribute(linePositions, 3).setUsage(THREE.DynamicDrawUsage));
+        lGeometry.setAttribute('color', new THREE.BufferAttribute(lineColors, 3).setUsage(THREE.DynamicDrawUsage));
+        
+        networkLines = new THREE.LineSegments(lGeometry, lMaterial);
+        scene.add(networkLines);
+    }
+
+    function onInteract(event) {
+        if (!isActive) return;
+        let clientX = event.clientX;
+        let clientY = event.clientY;
+        if (event.touches && event.touches.length > 0) {
+            clientX = event.touches[0].clientX; clientY = event.touches[0].clientY;
+        }
+        mouse.x = (clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+
+        raycaster.setFromCamera(mouse, camera);
+        const intersects = raycaster.intersectObject(networkPoints);
+
+        if (intersects.length > 0) {
+            const idx = intersects[0].index;
+            if (particlesData[idx].active) {
+                shatterNode(idx);
+            }
+        }
+    }
+
+    function shatterNode(idx) {
+        particlesData[idx].active = false;
+        particlesData[idx].vx = (Math.random() - 0.5) * 20;
+        particlesData[idx].vy = (Math.random() - 0.5) * 20;
+        particlesData[idx].vz = (Math.random() - 0.5) * 20;
+
+        brokenCount++;
+        document.getElementById('broken-count').innerText = brokenCount;
+
+        const treaty = TREATIES_DB[Math.floor(Math.random() * TREATIES_DB.length)];
+        document.getElementById('treaty-name').innerText = treaty.name;
+        document.getElementById('treaty-info').innerText = treaty.info;
+        
+        const popup = document.getElementById('treaty-popup');
+        popup.classList.add('visible');
+        clearTimeout(popupTimer);
+        popupTimer = setTimeout(() => { popup.classList.remove('visible'); }, 4000);
+
+        setTimeout(() => {
+            particlesData[idx].active = true;
+            particlesData[idx].radius = 250 + Math.random() * 50;
+            particlesData[idx].angle = Math.random() * Math.PI * 2;
+            particlesData[idx].yOffset = (Math.random() - 0.5) * 200;
+        }, 5000);
+    }
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        composer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        const time = Date.now() * 0.001;
+
+        let vertexPos = 0;
+        let colorPos = 0;
+        let numConnected = 0;
+        let activeLineSegments = [];
+
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            const pData = particlesData[i];
+            
+            if (pData.active) {
+                pData.angle += pData.speed * 0.01;
+                particlePositions[i*3] = Math.cos(pData.angle) * pData.radius;
+                particlePositions[i*3+1] = pData.yOffset + Math.sin(time * pData.floatSpeed + pData.floatPhase) * 25;
+                particlePositions[i*3+2] = Math.sin(pData.angle) * pData.radius;
+            } else {
+                particlePositions[i*3] += pData.vx;
+                particlePositions[i*3+1] += pData.vy;
+                particlePositions[i*3+2] += pData.vz;
+            }
+
+            if (pData.active) {
+                for (let j = i + 1; j < PARTICLE_COUNT; j++) {
+                    if (!particlesData[j].active) continue;
+
+                    const dx = particlePositions[i*3] - particlePositions[j*3];
+                    const dy = particlePositions[i*3+1] - particlePositions[j*3+1];
+                    const dz = particlePositions[i*3+2] - particlePositions[j*3+2];
+                    const distSq = dx*dx + dy*dy + dz*dz;
+
+                    if (distSq < MAX_DISTANCE * MAX_DISTANCE) {
+                        const dist = Math.sqrt(distSq);
+                        const alpha = 1.0 - (dist / MAX_DISTANCE);
+
+                        linePositions[vertexPos++] = particlePositions[i*3];
+                        linePositions[vertexPos++] = particlePositions[i*3+1];
+                        linePositions[vertexPos++] = particlePositions[i*3+2];
+
+                        linePositions[vertexPos++] = particlePositions[j*3];
+                        linePositions[vertexPos++] = particlePositions[j*3+1];
+                        linePositions[vertexPos++] = particlePositions[j*3+2];
+
+                        const midX = (particlePositions[i*3] + particlePositions[j*3]) / 2;
+                        const midY = (particlePositions[i*3+1] + particlePositions[j*3+1]) / 2;
+                        const midZ = (particlePositions[i*3+2] + particlePositions[j*3+2]) / 2;
+                        
+                        if (midX*midX + midY*midY + midZ*midZ < 6400) {
+                            activeLineSegments.push({ x: midX, y: midY, z: midZ, power: alpha });
+                        }
+
+                        const r = 1.0, g = 0.16, b = 0.48; 
+                        lineColors[colorPos++] = r * alpha; lineColors[colorPos++] = g * alpha; lineColors[colorPos++] = b * alpha;
+                        lineColors[colorPos++] = r * alpha; lineColors[colorPos++] = g * alpha; lineColors[colorPos++] = b * alpha;
+
+                        numConnected++;
+                    }
+                }
+            }
+        }
+
+        networkPoints.geometry.attributes.position.needsUpdate = true;
+        networkLines.geometry.attributes.position.needsUpdate = true;
+        networkLines.geometry.attributes.color.needsUpdate = true;
+        networkLines.geometry.setDrawRange(0, numConnected * 2);
+
+        // --- 粘液流体的分合物理场 ---
+        const sPos = sparkGroup.geometry.attributes.position.array;
+        let jitterAmplitude = 3.0; 
+        
+        for (let i = 0; i < SPARK_FRAGMENTS; i++) {
+            let frag = sparkData[i];
+            
+            let jitterX = (Math.random() - 0.5) * jitterAmplitude; 
+            let jitterY = (Math.random() - 0.5) * jitterAmplitude; 
+            let jitterZ = (Math.random() - 0.5) * jitterAmplitude; 
+
+            let repelX = 0, repelY = 0, repelZ = 0;
+            for (let line of activeLineSegments) {
+                let dx = frag.currX - line.x;
+                let dy = frag.currY - line.y;
+                let dz = frag.currZ - line.z;
+                let dSq = dx*dx + dy*dy + dz*dz;
+                
+                if (dSq < 1200 && dSq > 0.1) {
+                    let distRatio = (1200 - dSq) / 1200;
+                    let force = Math.pow(distRatio, 3) * line.power * 35.0; 
+                    repelX += (dx / Math.sqrt(dSq)) * force;
+                    repelY += (dy / Math.sqrt(dSq)) * force;
+                    repelZ += (dz / Math.sqrt(dSq)) * force;
+                }
+            }
+
+            let pullX = (frag.baseX - frag.currX) * 0.15;
+            let pullY = (frag.baseY - frag.currY) * 0.15;
+            let pullZ = (frag.baseZ - frag.currZ) * 0.15;
+
+            frag.vx = (frag.vx + repelX + pullX) * 0.68;
+            frag.vy = (frag.vy + repelY + pullY) * 0.68;
+            frag.vz = (frag.vz + repelZ + pullZ) * 0.68;
+
+            frag.currX += frag.vx + jitterX;
+            frag.currY += frag.vy + jitterY;
+            frag.currZ += frag.vz + jitterZ;
+
+            sPos[i*3] = frag.currX;
+            sPos[i*3+1] = frag.currY;
+            sPos[i*3+2] = frag.currZ;
+        }
+        sparkGroup.geometry.attributes.position.needsUpdate = true;
+        
+        const heartbeat = 1.0 + Math.sin(time * 5) * 0.05;
+        sparkGroup.scale.set(heartbeat, heartbeat, heartbeat);
+
+        camera.position.x = Math.sin(time * 0.15) * 120;
+        camera.position.y = 80 + Math.cos(time * 0.2) * 40;
+        camera.lookAt(0, 0, 0);
+
+        composer.render();
+    }
+
+    window.onload = init;
+</script>
+</body>
+</html>
